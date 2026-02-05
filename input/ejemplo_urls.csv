@@ -1,3 +1,15 @@
-Clase Matemáticas,https://zoom.us/rec/play/gD5HiYaP4SvEo7ILjkl6BaVa8_S5vyP0e7HatLxbx7SlXuykhw_-89F8sWXTTQGQBJXhi7o-S1bSdKc.VDINYMvBrp8hB9at
-Clase Física,https://zoom.us/rec/play/gD5HiYaP4SvEo7ILjkl6BaVa8_S5vyP0e7HatLxbx7SlXuykhw_-89F8sWXTTQGQBJXhi7o-S1bSdKc.VDINYMvBrp8hB9at
-Conferencia Python,https://zoom.us/rec/play/gD5HiYaP4SvEo7ILjkl6BaVa8_S5vyP0e7HatLxbx7SlXuykhw_-89F8sWXTTQGQBJXhi7o-S1bSdKc.VDINYMvBrp8hB9at
+# Ejemplo de archivo de entrada para descargas masivas
+# Este archivo contiene URLs de grabaciones de Zoom
+# Formato: titulo,URL (separados por coma)
+#
+# Lineas que empiezan con # son comentarios
+# Lineas vacias son ignoradas
+
+# Formato CSV: titulo,URL
+Clase 1,https://zoom.us/rec/play/tu-id-de-grabacion-1
+Clase 2,https://zoom.us/rec/play/tu-id-de-grabacion-2
+Reunion,https://zoom.us/rec/play/tu-id-de-grabacion-3
+
+# Tambien puedes usar formato TXT (una URL por linea):
+# https://zoom.us/rec/play/tu-id-1
+# https://zoom.us/rec/play/tu-id-2

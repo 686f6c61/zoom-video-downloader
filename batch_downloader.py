@@ -1,586 +1,430 @@
 #!/usr/bin/env python3
 """
-Zoom Video Downloader - Batch Processing
-========================================
+Zoom Video Downloader - Descarga Masiva
+=======================================
 
-Este proyecto permite descargar grabaciones de Zoom en diferentes formatos:
-- Videos (MP4)
-- Audios (MP3) 
-- Transcripciones (SRT/VTT)
+Script para procesar múltiples URLs de Zoom desde archivos CSV o TXT.
+Ideal para descargas masivas de grabaciones.
 
-El script batch_downloader.py procesa múltiples URLs desde archivos CSV o TXT
-y descarga el contenido especificado utilizando yt-dlp como herramienta principal.
-
-Características:
+Funcionalidades:
 - Soporte para descarga masiva desde archivos
-- Conversión automática de video a audio MP3
-- Extracción de transcripciones cuando están disponibles
+- Reintentos automaticos con backoff exponencial
+- Barra de progreso visual
+- Conversión automatica de video a audio MP3
+- Extracción de transcripciones cuando disponibles
 - Nombres de archivo personalizados desde CSV
-- Instalación automática de dependencias (yt-dlp, ffmpeg)
+- Logging persistente
+- Metadatos de descarga
 
-Formatos de entrada soportados:
-- TXT: una URL de Zoom por línea
+Formatos de entrada:
+- TXT: una URL de Zoom por linea
 - CSV: titulo,url (dos columnas separadas por coma)
 
 Uso: python3 batch_downloader.py <archivo_urls> [tipo]
 Tipos: video, audio, transcript, all
 
-Author: 686f6c61
-Project: zoom-video-downloader
-"""
-"""
-Zoom Video Downloader - Batch Processing
-========================================
-
-Este proyecto permite descargar grabaciones de Zoom en diferentes formatos:
-- Videos (MP4)
-- Audios (MP3) 
-- Transcripciones (SRT/VTT)
-
-El script batch_downloader.py procesa múltiples URLs desde archivos CSV o TXT
-y descarga el contenido especificado utilizando yt-dlp como herramienta principal.
-
-Características:
-- Soporte para descarga masiva desde archivos
-- Conversión automática de video a audio MP3
-- Extracción de transcripciones cuando están disponibles
-- Nombres de archivo personalizados desde CSV
-- Instalación automática de dependencias (yt-dlp, ffmpeg)
-
-Formatos de entrada soportados:
-- TXT: una URL de Zoom por línea
-- CSV: titulo,url (dos columnas separadas por coma)
-
-Uso: python3 batch_downloader.py <archivo_urls> [tipo]
-Tipos: video, audio, transcript, all
-
-Author: 686f6c61
-Project: zoom-video-downloader
+Autor: Zoom Video Downloader
+Version: 2.0.0
 """
 
-import requests
-import re
-import os
 import sys
-import subprocess
-import csv
-from urllib.parse import urlparse, parse_qs
+import argparse
+import logging
+from typing import Dict, Any, Optional, List, Tuple
+from pathlib import Path
 
-def create_directories():
-    """
-    Crear estructura de directorios para organizar las descargas.
-    
-    Crea los siguientes directorios si no existen:
-    - downloads/: Directorio principal
-    - downloads/MP4/: Para archivos de video
-    - downloads/MP3/: Para archivos de audio
-    - downloads/SRT/: Para transcripciones
-    
-    Returns:
-        None
-    """
-    directories = ['downloads', 'downloads/MP4', 'downloads/MP3', 'downloads/SRT']
-    for directory in directories:
-        os.makedirs(directory, exist_ok=True)
+from core import (
+    cargar_configuracion,
+    inicializar_logging,
+    crear_directorios,
+    sanitizar_nombre_archivo,
+    validar_url_zoom,
+    instalar_dependencias,
+    verificar_ffmpeg,
+    convertir_a_mp3,
+    convertir_vtt_a_srt,
+    BarraProgreso,
+    reintentar_con_backoff,
+    guardar_metadatos,
+    formatear_tamano,
+    Colores,
+    imprimir_texto,
+    leer_urls_desde_archivo,
+)
 
-def sanitize_filename(filename):
+
+def construir_comando_yt_dlp(
+    url: str, tipo: str, nombre_salida: str, config: Dict[str, Any]
+) -> Tuple[Optional[List[str]], Optional[str], Optional[str]]:
     """
-    Sanitizar nombre de archivo para que sea válido en todos los sistemas operativos.
-    
+    Construir comando de yt-dlp segun el tipo de descarga.
+
     Args:
-        filename (str): Nombre de archivo original
-        
-    Returns:
-        str: Nombre de archivo sanitizado
-        
-    Proceso:
-    1. Reemplaza caracteres inválidos por guiones bajos
-    2. Limita la longitud a 50 caracteres para evitar problemas
-    """
-    import re
-    # Reemplazar caracteres inválidos en Windows/Linux/Mac
-    filename = re.sub(r'[<>:"/\\|?*]', '_', filename)
-    # Limitar longitud para evitar problemas de sistema de archivos
-    if len(filename) > 50:
-        filename = filename[:50]
-    return filename
+        url: URL de la grabacion de Zoom
+        tipo: Tipo de descarga (video, audio, transcript, all)
+        nombre_salida: Nombre base para el archivo de salida
+        config: Configuracion del programa
 
-def extract_video_id(zoom_url):
-    """
-    Extraer el ID único de la grabación desde la URL de Zoom.
-    
-    Args:
-        zoom_url (str): URL completa de la grabación de Zoom
-        
     Returns:
-        str or None: ID de la grabación o None si no se encuentra
-        
-    Ejemplo:
-    Input:  https://zoom.us/rec/play/gD5HiYaP4SvEo7ILjkl6BaVa8_S5vyP0e7HatLxbx7SlXuykhw_-89F8sWXTTQGQBJXhi7o-S1bSdKc.VDINYMvBrp8hB9at
-    Output: gD5HiYaP4SvEo7ILjkl6BaVa8_S5vyP0e7HatLxbx7SlXuykhw_-89F8sWXTTQGQBJXhi7o-S1bSdKc.VDINYMvBrp8hB9at
+        Tupla (comando, ruta_salida, tipo_archivos)
     """
-    match = re.search(r'/rec/play/([^?]+)', zoom_url)
-    return match.group(1) if match else None
+    dirs = config["descargas"]
+    video_config = config.get("video", {})
+    transcript_config = config.get("transcripcion", {})
 
-def install_ffmpeg():
-    """
-    Verificar e instalar ffmpeg si no está disponible en el sistema.
-    
-    ffmpeg es necesario para convertir videos MP4 a audio MP3.
-    Esta función intenta instalarlo automáticamente en sistemas Debian/Ubuntu.
-    
-    Returns:
-        bool: True si ffmpeg está disponible o se instaló correctamente, False en caso contrario
-        
-    Nota:
-    - Requiere privilegios de sudo para instalación
-    - Solo compatible con sistemas basados en Debian/Ubuntu
-    - Para otros sistemas, instalar manualmente: apt install ffmpeg
-    """
-    try:
-        # Verificar si ffmpeg ya está instalado
-        subprocess.run(['ffmpeg', '-version'], check=True, capture_output=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("Instalando ffmpeg...")
-        try:
-            # Actualizar lista de paquetes e instalar ffmpeg
-            subprocess.run(['sudo', 'apt', 'update'], check=True)
-            subprocess.run(['sudo', 'apt', 'install', '-y', 'ffmpeg'], check=True)
-            return True
-        except subprocess.CalledProcessError:
-            print("No se pudo instalar ffmpeg automáticamente")
-            print("Por favor, instálalo manualmente: sudo apt install ffmpeg")
-            return False
-
-def convert_to_mp3(input_file, output_file):
-    """
-    Convertir archivo de video MP4 a audio MP3 usando ffmpeg.
-    
-    Args:
-        input_file (str): Ruta del archivo de video de entrada
-        output_file (str): Ruta del archivo de audio de salida
-        
-    Returns:
-        bool: True si la conversión fue exitosa, False en caso contrario
-        
-    Proceso:
-    1. Verifica que ffmpeg esté disponible
-    2. Ejecuta ffmpeg con parámetros optimizados para calidad
-    3. Extrae solo el stream de audio del video
-    
-    Parámetros ffmpeg:
-    - -q:a 0: Calidad de audio máxima (VBR 0)
-    - -map a: Seleccionar solo el stream de audio
-    """
-    try:
-        if not install_ffmpeg():
-            return False
-            
-        print(f"Convirtiendo {input_file} a MP3...")
+    if tipo == "video":
+        ruta_salida = str(
+            Path(dirs["directorio_base"]) / dirs["video"] / f"{nombre_salida}.mp4"
+        )
         cmd = [
-            'ffmpeg',
-            '-i', input_file,        # Archivo de entrada
-            '-q:a', '0',             # Calidad de audio máxima
-            '-map', 'a',             # Mapear solo el stream de audio
-            output_file              # Archivo de salida
+            "yt-dlp",
+            "--no-warnings",
+            "--format",
+            f"best[ext={video_config.get('formato_preferido', 'mp4')}]/best",
+            "--output",
+            ruta_salida,
+            url,
         ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print(f"Conversión completada: {output_file}")
-            return True
-        else:
-            print(f"Error en conversión: {result.stderr}")
-            return False
-            
-    except Exception as e:
-        print(f"Error convirtiendo a MP3: {e}")
+        return cmd, ruta_salida, "video"
+
+    elif tipo == "audio":
+        ruta_salida = str(
+            Path(dirs["directorio_base"]) / dirs["audio"] / f"{nombre_salida}.mp3"
+        )
+        cmd = [
+            "yt-dlp",
+            "--no-warnings",
+            "--extract-audio",
+            "--audio-format",
+            video_config.get("formato_audio", "mp3"),
+            "--audio-quality",
+            str(video_config.get("calidad_audio", "0")),
+            "--output",
+            str(
+                Path(dirs["directorio_base"])
+                / dirs["audio"]
+                / f"{nombre_salida}.%(ext)s"
+            ),
+            url,
+        ]
+        return cmd, ruta_salida, "audio"
+
+    elif tipo == "transcript":
+        ruta_base = str(
+            Path(dirs["directorio_base"]) / dirs["transcripcion"] / nombre_salida
+        )
+        cmd = [
+            "yt-dlp",
+            "--no-warnings",
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-langs",
+            transcript_config.get("idiomas", "all"),
+            "--skip-download",
+            "--output",
+            ruta_base,
+            url,
+        ]
+        return cmd, ruta_base, "transcript"
+
+    elif tipo == "all":
+        ruta_video = str(
+            Path(dirs["directorio_base"]) / dirs["video"] / f"{nombre_salida}.mp4"
+        )
+        cmd = [
+            "yt-dlp",
+            "--no-warnings",
+            "--format",
+            f"best[ext={video_config.get('formato_preferido', 'mp4')}]/best",
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-langs",
+            transcript_config.get("idiomas", "all"),
+            "--output",
+            ruta_video,
+            url,
+        ]
+        return cmd, ruta_video, "all"
+
+    return None, None, None
+
+
+def ejecutar_descarga(
+    url: str, tipo: str, nombre: str, config: Dict[str, Any], logger: logging.Logger
+) -> bool:
+    """
+    Ejecutar la descarga de una grabacion de Zoom.
+
+    Args:
+        url: URL de la grabacion
+        tipo: Tipo de descarga
+        nombre: Nombre del video
+        config: Configuracion del programa
+        logger: Logger para registrar eventos
+
+    Returns:
+        True si la descarga fue exitosa
+    """
+    es_valida, video_id = validar_url_zoom(url)
+    if not es_valida:
+        logger.error(f"URL invalida: {url}")
         return False
 
-def download_with_yt_dlp(zoom_url, download_type='video', custom_name=None):
-    """
-    Descargar contenido de Zoom utilizando yt-dlp como herramienta principal.
-    
-    yt-dlp es un fork de youtube-dl con soporte mejorado para Zoom y otras plataformas.
-    
-    Args:
-        zoom_url (str): URL de la grabación de Zoom
-        download_type (str): Tipo de descarga ('video', 'audio', 'transcript', 'all')
-        custom_name (str, optional): Nombre personalizado para el archivo
-        
-    Returns:
-        bool: True si la descarga fue exitosa, False en caso contrario
-        
-    Proceso:
-    1. Verificar/instalar yt-dlp si no está disponible
-    2. Extraer ID del video para generar nombre de archivo
-    3. Construir comando yt-dlp según tipo de descarga
-    4. Ejecutar descarga y manejar errores
-    5. Si es 'all', convertir video a audio adicionalmente
-    
-    Tipos de descarga soportados:
-    - video: Descargar solo el archivo MP4
-    - audio: Extraer y descargar solo audio MP3
-    - transcript: Descargar subtítulos/transcripción SRT/VTT
-    - all: Descargar video + audio + transcripción
-    """
-    try:
-        # Extraer ID para mostrar en progreso
-        video_id = extract_video_id(zoom_url)
-        safe_id = video_id[:20] if video_id else "recording"
-        display_name = custom_name or safe_id
-        print(f"  Descargando {display_name}...")
-        
-        # Verificar si yt-dlp está instalado, instalar si no
-        try:
-            subprocess.run(['yt-dlp', '--version'], check=True, capture_output=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            print("  Instalando yt-dlp...")
-            subprocess.run(['pip', 'install', 'yt-dlp'], check=True)
-        
-        # Generar nombre base para archivos
-        base_name = custom_name if custom_name else safe_id
-        
-        output_template = None
-        cmd = None
-        
-        # Construir comando según tipo de descarga
-        if download_type == 'video':
-            output_template = f"downloads/MP4/{base_name}.mp4"
-            cmd = [
-                'yt-dlp',
-                '--no-warnings',                    # Ocultar advertencias
-                '--format', 'best[ext=mp4]/best', # Preferir MP4 de mejor calidad
-                '--output', output_template,
-                zoom_url
-            ]
-        elif download_type == 'audio':
-            output_template = f"downloads/MP3/{base_name}.mp3"
-            cmd = [
-                'yt-dlp',
-                '--no-warnings',
-                '--extract-audio',                # Extraer solo audio
-                '--audio-format', 'mp3',           # Formato de salida MP3
-                '--audio-quality', '0',            # Calidad máxima
-                '--output', f"downloads/MP3/{base_name}.%(ext)s",
-                zoom_url
-            ]
-        elif download_type == 'transcript':
-            output_template = f"downloads/SRT/{base_name}"
-            cmd = [
-                'yt-dlp',
-                '--no-warnings',
-                '--write-subs',                   # Escribir subtítulos
-                '--write-auto-subs',              # Incluir subtítulos automáticos
-                '--sub-langs', 'all',             # Todos los idiomas disponibles
-                '--skip-download',                 # No descargar video
-                '--output', output_template,
-                zoom_url
-            ]
-        elif download_type == 'all':
-            output_template = f"downloads/MP4/{base_name}.mp4"
-            cmd = [
-                'yt-dlp',
-                '--no-warnings',
-                '--format', 'best[ext=mp4]/best',
-                '--write-subs',                   # Incluir subtítulos
-                '--write-auto-subs',
-                '--sub-langs', 'all',
-                '--output', output_template,
-                zoom_url
-            ]
-        
-        # Validar que se construyó el comando correctamente
-        if not cmd or not output_template:
-            print(f"  Tipo de descarga no válido: {download_type}")
-            return False
-        
-        # Ejecutar descarga
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print(f"  Descarga completada: {base_name}")
-            
-            # Si se descargó video y se pidió 'all', convertir también a MP3
-            if download_type == 'all':
-                video_file = f"downloads/MP4/{base_name}.mp4"
-                if os.path.exists(video_file):
-                    audio_file = f"downloads/MP3/{base_name}.mp3"
-                    convert_to_mp3(video_file, audio_file)
-            
-            return True
-        else:
-            print(f"  Error con yt-dlp: {result.stderr}")
-            return False
-            
-    except Exception as e:
-        print(f"  Error con yt-dlp: {e}")
-        return False
-        
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode == 0:
-            print(f"  Descarga completada: {base_name}")
-            
-            # Si se descargó video y se pidió 'all', convertir también a MP3
-            if download_type == 'all':
-                video_file = f"downloads/MP4/{base_name}.mp4"
-                if os.path.exists(video_file):
-                    audio_file = f"downloads/MP3/{base_name}.mp3"
-                    convert_to_mp3(video_file, audio_file)
-            
-            return True
-        else:
-            print(f"  Error con yt-dlp: {result.stderr}")
-            return False
-            
-    except Exception as e:
-        print(f"  Error con yt-dlp: {e}")
+    if not instalar_dependencias(logger):
+        logger.error("No se pudo instalar yt-dlp")
         return False
 
-def read_urls_from_file(file_path):
-    """
-    Leer y procesar URLs de Zoom desde archivos TXT o CSV.
-    
-    Soporta dos formatos:
-    1. TXT: Una URL de Zoom por línea
-    2. CSV: titulo,url (dos columnas separadas por coma)
-    
-    Args:
-        file_path (str): Ruta al archivo a procesar
-        
-    Returns:
-        list: Lista de tuplas (title, url) con las URLs válidas encontradas
-        
-    Formatos soportados:
-    
-    TXT:
-    https://zoom.us/rec/play/abc123...
-    https://zoom.us/rec/play/def456...
-    
-    CSV:
-    Clase Matemáticas,https://zoom.us/rec/play/abc123...
-    Clase Física,https://zoom.us/rec/play/def456...
-    
-    Proceso:
-    1. Leer archivo con codificación UTF-8
-    2. Detectar formato automáticamente (CSV vs TXT)
-    3. Validar que las URLs sean de Zoom
-    4. Sanitizar nombres de archivo
-    5. Retornar lista procesada
-    """
-    urls = []
-    
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            content = file.read().strip()
-            
-        if not content:
-            print("El archivo está vacío")
-            return []
-        
-        # Detectar formato automáticamente por presencia de comas
-        if ',' in content:
-            # Formato CSV: titulo,url
-            lines = content.split('\n')
-            for line in lines:
-                if ',' in line:
-                    # Dividir solo en la primera coma para permitir comas en títulos
-                    parts = line.split(',', 1)
-                    if len(parts) >= 2:
-                        title = sanitize_filename(parts[0].strip())
-                        url = parts[1].strip()
-                        # Validar que sea URL de Zoom válida
-                        if url.startswith('https://zoom.us/rec/'):
-                            urls.append((title, url))
-        else:
-            # Formato TXT: una URL por línea
-            lines = content.split('\n')
-            for i, line in enumerate(lines):
-                line = line.strip()
-                if line.startswith('https://zoom.us/rec/'):
-                    # Generar nombre automático si no hay título
-                    title = f"video_{i+1}"
-                    urls.append((title, line))
-        
-        return urls
-        
-    except FileNotFoundError:
-        print(f"No se encontró el archivo: {file_path}")
-        return []
-    except Exception as e:
-        print(f"Error leyendo el archivo: {e}")
-        return []
+    nombre_archivo = sanitizar_nombre_archivo(nombre)
 
-def get_user_choice():
-    """
-    Mostrar menú interactivo para seleccionar tipo de descarga.
-    
-    Returns:
-        str: Tipo de descarga seleccionado ('video', 'audio', 'transcript', 'all')
-        
-    Comportamiento:
-    - En modo interactivo: muestra menú y espera entrada del usuario
-    - En modo no interactivo (pipelines, scripts): retorna 'all' por defecto
-    
-    Opciones disponibles:
-    1. video: Solo archivos MP4
-    2. audio: Solo archivos MP3 (extraídos del video)
-    3. transcript: Solo archivos SRT/VTT de transcripción
-    4. all: Video + audio + transcripción
-    """
-    print("\n¿Qué deseas descargar?")
-    print("1. Solo videos (MP4)")
-    print("2. Solo audios (MP3)")
-    print("3. Solo transcripciones (SRT)")
-    print("4. Todo (video + audio + transcripción)")
-    
-    # Verificar si estamos en modo no interactivo (pipelines, automatización)
-    if not sys.stdin.isatty():
-        print("Modo no interactivo detectado, usando 'all' por defecto")
-        return 'all'
-    
-    while True:
-        try:
-            choice = input("Elige una opción (1-4): ").strip()
-            if choice == '1':
-                return 'video'
-            elif choice == '2':
-                return 'audio'
-            elif choice == '3':
-                return 'transcript'
-            elif choice == '4':
-                return 'all'
-            else:
-                print("Opción no válida. Por favor, elige 1, 2, 3 o 4.")
-        except EOFError:
-            print("Modo no interactivo detectado, usando 'all' por defecto")
-            return 'all'
+    logger.info(f"Descargando: {nombre_archivo} (tipo: {tipo})")
 
-def main():
+    crear_directorios(config)
+
+    cmd, ruta_salida, tipo_archivos = construir_comando_yt_dlp(
+        url, tipo, nombre_archivo, config
+    )
+
+    if not cmd:
+        logger.error(f"Tipo de descarga no valido: {tipo}")
+        return False
+
+    reintentos = config.get("reintentos", {}).get("maximos", 3)
+
+    exito, resultado = reintentar_con_backoff(
+        func=lambda: __import__("subprocess").run(cmd, capture_output=True, text=True),
+        max_reintentos=reintentos,
+        intervalo_base=config.get("reintentos", {}).get("intervalo_segundos", 5),
+        logger=logger,
+    )
+
+    if not exito:
+        logger.error(f"Descarga fallida: {nombre_archivo}")
+        return False
+
+    if resultado.returncode != 0:
+        logger.error(f"yt-dlp error: {resultado.stderr}")
+        return False
+
+    logger.info(f"Descarga completada: {nombre_archivo}")
+
+    rutas_archivos = {}
+
+    if tipo_archivos in ["video", "all"]:
+        if tipo == "all":
+            import subprocess
+
+            video_file = str(
+                Path(config["descargas"]["directorio_base"])
+                / config["descargas"]["video"]
+                / f"{nombre_archivo}.mp4"
+            )
+            audio_file = str(
+                Path(config["descargas"]["directorio_base"])
+                / config["descargas"]["audio"]
+                / f"{nombre_archivo}.mp3"
+            )
+
+            if Path(video_file).exists():
+                convertir_a_mp3(video_file, audio_file, logger, config)
+                rutas_archivos["audio"] = audio_file
+
+        rutas_archivos["video"] = ruta_salida
+
+    if tipo_archivos in ["transcript", "all"]:
+        import glob
+
+        archivos_vtt = glob.glob(
+            str(
+                Path(config["descargas"]["directorio_base"])
+                / config["descargas"]["transcripcion"]
+                / f"{nombre_archivo}*.vtt"
+            )
+        )
+
+        convertir_srt = "srt" in config.get("transcripcion", {}).get(
+            "formatos_salida", []
+        )
+
+        for vtt in archivos_vtt:
+            rutas_archivos["transcripcion"] = vtt
+            if convertir_srt:
+                convertir_vtt_a_srt(vtt, logger)
+
+    if rutas_archivos:
+        guardar_metadatos(nombre_archivo, url, tipo, rutas_archivos, logger)
+
+    return True
+
+
+def obtener_argumentos() -> argparse.Namespace:
     """
-    Función principal del descargador masivo de Zoom.
-    
-    Uso:
-    python3 batch_downloader.py <archivo_urls> [tipo]
-    
+    Parsear argumentos de linea de comandos.
+
+    Returns:
+        Namespace con los argumentos parseados
+    """
+    parser = argparse.ArgumentParser(
+        description="Zoom Video Downloader - Descarga masiva de grabaciones",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Ejemplos:
+  python3 batch_downloader.py input/urls.txt all
+  python3 batch_downloader.py input/urls.csv video
+  python3 batch_downloader.py input/urls.txt audio --verbose
+        """,
+    )
+
+    parser.add_argument(
+        "archivo", nargs="?", help="Ruta al archivo TXT o CSV con URLs de Zoom"
+    )
+
+    parser.add_argument(
+        "tipo",
+        nargs="?",
+        default="all",
+        choices=["video", "audio", "transcript", "all"],
+        help="Tipo de descarga (default: all)",
+    )
+
+    parser.add_argument(
+        "--config",
+        default="config.yaml",
+        help="Archivo de configuracion (default: config.yaml)",
+    )
+
+    parser.add_argument("--verbose", action="store_true", help="Modo verboso (debug)")
+
+    parser.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="No pedir confirmacion antes de descargar",
+    )
+
+    return parser.parse_args()
+
+
+def mostrar_resumen(
+    total: int, exitosas: int, fallidas: int, logger: logging.Logger
+) -> None:
+    """
+    Mostrar resumen de la descarga masiva.
+
     Args:
-    - archivo_urls: Ruta al archivo TXT o CSV con URLs de Zoom
-    - tipo (opcional): video, audio, transcript, all
-    
-    Flujo de ejecución:
-    1. Validar argumentos de línea de comandos
-    2. Verificar existencia del archivo
-    3. Crear estructura de directorios
-    4. Leer y procesar URLs del archivo
-    5. Mostrar resumen de URLs encontradas
-    6. Seleccionar tipo de descarga (interactivo o argumento)
-    7. Confirmar descarga (modo interactivo)
-    8. Procesar descargas una por una
-    9. Mostrar estadísticas finales
-    
-    Ejemplos de uso:
-    python3 batch_downloader.py input/urls.csv all
-    python3 batch_downloader.py input/urls.txt video
-    python3 batch_downloader.py input/urls.csv  # Interactivo
+        total: Total de URLs procesadas
+        exitosas: Numero de descargas exitosas
+        fallidas: Numero de descargas fallidas
+        logger: Logger para registrar eventos
     """
-    # Validar argumentos mínimos
-    if len(sys.argv) < 2:
-        print("Uso: python3 batch_downloader.py <archivo_urls> [tipo]")
-        print("Formatos de archivo:")
-        print("  TXT: una URL por línea")
-        print("  CSV: titulo,url (dos columnas)")
-        print("\nTipos disponibles: video, audio, transcript, all")
-        print("Si no especificas tipo, se te preguntará interactivamente")
-        sys.exit(1)
-    
-    file_path = sys.argv[1]
-    download_type = sys.argv[2] if len(sys.argv) > 2 else None
-    
-    # Verificar existencia del archivo
-    if not os.path.exists(file_path):
-        print(f"El archivo no existe: {file_path}")
-        sys.exit(1)
-    
-    # Preparar entorno
-    create_directories()
-    
-    # Leer URLs del archivo
-    print(f"Leyendo URLs desde: {file_path}")
-    urls = read_urls_from_file(file_path)
-    
-    if not urls:
-        print("No se encontraron URLs válidas en el archivo")
-        sys.exit(1)
-    
-    print(f"Se encontraron {len(urls)} URLs válidas")
-    
-    # Mostrar resumen de URLs (limitado para no saturar la salida)
-    print("\nResumen de URLs encontradas:")
-    for i, (title, url) in enumerate(urls[:5]):  # Mostrar solo las primeras 5
-        video_id = extract_video_id(url)
-        if video_id:
-            print(f"  {i+1}. {title} -> {video_id[:20]}...")
-        else:
-            print(f"  {i+1}. {title} -> URL inválida")
-    
-    if len(urls) > 5:
-        print(f"  ... y {len(urls) - 5} más")
-    
-    # Determinar tipo de descarga
-    if not download_type:
-        download_type = get_user_choice()
-    elif download_type not in ['video', 'audio', 'transcript', 'all']:
-        print(f"Error: tipo '{download_type}' no válido. Usa: video, audio, transcript, all")
-        sys.exit(1)
-    
-    # Confirmar descarga en modo interactivo
-    print(f"\nSe descargarán {len(urls)} archivos en formato: {download_type}")
-    
-    if not sys.stdin.isatty():
-        print("Iniciando descarga automática (modo no interactivo)...")
-    else:
-        try:
-            confirm = input("¿Continuar? (s/N): ").strip().lower()
-            if confirm not in ['s', 'si', 'sí', 'y', 'yes']:
-                print("Descarga cancelada")
-                sys.exit(0)
-        except EOFError:
-            print("Iniciando descarga automática (modo no interactivo)...")
-    
-    # Ejecutar descargas masivas
-    print(f"\nIniciando descarga masiva ({download_type})...")
-    print("=" * 50)
-    
-    successful = 0
-    failed = 0
-    
-    for i, (title, url) in enumerate(urls, 1):
-        print(f"\n[{i}/{len(urls)}] Procesando: {title}")
-        
-        if download_with_yt_dlp(url, download_type, title):
-            successful += 1
-        else:
-            failed += 1
-            print(f"  Falló la descarga de: {title}")
-    
-    # Mostrar estadísticas finales
     print("\n" + "=" * 50)
-    print("RESUMEN DE DESCARGA:")
-    print(f"  Exitosas: {successful}")
-    print(f"  Fallidas: {failed}")
-    print(f"  Total procesadas: {len(urls)}")
-    
-    if successful > 0:
-        print(f"\nLos archivos se guardaron en:")
-        if download_type in ['video', 'all']:
-            print(f"  Videos: downloads/MP4/")
-        if download_type in ['audio', 'all']:
-            print(f"  Audios: downloads/MP3/")
-        if download_type in ['transcript', 'all']:
-            print(f"  Transcripciones: downloads/SRT/")
+    print("RESUMEN DE DESCARGA MASIVA")
+    print("=" * 50)
+    print(f"  Total procesadas: {total}")
+    print(f"  Exitosas: {exitosas}")
+    print(f"  Fallidas: {fallidas}")
+    print(
+        f"  Tasa de exito: {((exitosas / total) * 100):.1f}%"
+        if total > 0
+        else "  Tasa de exito: 0%"
+    )
+    print("=" * 50)
+
+    logger.info(f"Resumen: {exitosas}/{total} descargas exitosas")
+
+
+def main() -> None:
+    """
+    Funcion principal del descargador masivo.
+    """
+    args = obtener_argumentos()
+
+    config = cargar_configuracion(args.config)
+
+    if args.verbose:
+        config["logging"]["nivel"] = "DEBUG"
+
+    logger = inicializar_logging(config)
+
+    logger.info("Iniciando Zoom Video Downloader - Descarga Masiva")
+
+    if not args.archivo:
+        print("Uso: python3 batch_downloader.py <archivo_urls> [tipo]")
+        print("Formatos:")
+        print("  TXT: una URL por linea")
+        print("  CSV: titulo,url (dos columnas)")
+        print("\nTipos: video, audio, transcript, all")
+        sys.exit(1)
+
+    archivo_path = Path(args.archivo)
+    if not archivo_path.exists():
+        logger.error(f"El archivo no existe: {archivo_path}")
+        sys.exit(1)
+
+    urls = leer_urls_desde_archivo(str(archivo_path), logger)
+
+    if not urls:
+        logger.error("No se encontraron URLs validas en el archivo")
+        sys.exit(1)
+
+    print(f"\nSe procesaran {len(urls)} grabaciones")
+    print(f"Tipo de descarga: {args.tipo}")
+
+    for i, (nombre, url) in enumerate(urls[:5], 1):
+        print(f"  {i}. {nombre}: {url[:50]}...")
+
+    if len(urls) > 5:
+        print(f"  ... y {len(urls) - 5} mas")
+
+    if not args.no_confirm:
+        confirm = input("\nContinuar? (s/N): ").strip().lower()
+        if confirm not in ["s", "si", "yes"]:
+            print("Descarga cancelada")
+            sys.exit(0)
+
+    crear_directorios(config)
+
+    barra = BarraProgreso(len(urls), prefix="Descargando", longitud=40)
+
+    exitosas = 0
+    fallidas = 0
+    fallidas_detalles = []
+
+    for i, (nombre, url) in enumerate(urls, 1):
+        barra.actualizar(i, f"{nombre}")
+
+        if ejecutar_descarga(url, args.tipo, nombre, config, logger):
+            exitosas += 1
+        else:
+            fallidas += 1
+            fallidas_detalles.append((nombre, url))
+
+    barra.finalizar()
+
+    mostrar_resumen(len(urls), exitosas, fallidas, logger)
+
+    if fallidas_detalles and config.get("descarga", {}).get(
+        "reintentar_descargas_fallidas", False
+    ):
+        print("\nReintentando descargas fallidas...")
+        reintentos_fallidos = []
+        for nombre, url in fallidas_detalles:
+            if ejecutar_descarga(url, args.tipo, nombre, config, logger):
+                exitosas += 1
+                fallidas -= 1
+            else:
+                reintentos_fallidos.append((nombre, url))
+
+        if reintentos_fallidos:
+            print(f"\nDescargas que siguen fallando: {len(reintentos_fallidos)}")
+            for nombre, url in reintentos_fallidos:
+                logger.error(f"No se pudo descargar: {nombre} ({url})")
+
+    if exitosas > 0:
+        logger.info("Descarga masiva completada")
+        sys.exit(0)
+    else:
+        logger.error("Descarga masiva fallida")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

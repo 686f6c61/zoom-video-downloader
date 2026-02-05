@@ -1,200 +1,121 @@
 #!/bin/bash
 
-# DESCARGADOR DE ZOOM - INTERFAZ INTERACTIVA
-# Inicia automáticamente la interfaz gráfica interactiva
+# ============================================================================
+# ZOOM VIDEO DOWNLOADER - Script de Inicio
+# ============================================================================
+#
+# Este script verifica las dependencias necesarias y ejecuta la interfaz
+# interactiva de Zoom Video Downloader.
+#
+# Funciones del script:
+# 1. Verificar que Python3 este instalado
+# 2. Verificar que todos los archivos del proyecto existan
+# 3. Instalar dependencias automaticamente si es necesario
+# 4. Ejecutar la interfaz interactiva (main.py)
+#
+# Requisitos:
+# - Python 3.8 o superior
+# - pip3
+# - Conexion a internet (para instalar dependencias)
+#
+# Uso:
+#   ./start.sh
+#
+# El script creara automaticamente los siguientes directorios si no existen:
+#   - downloads/
+#   - downloads/MP4/
+#   - downloads/MP3/
+#   - downloads/SRT/
+#   - log/
+#
+# ============================================================================
 
-# Verificar si Python3 está disponible
+set -e
+
+echo "Iniciando Zoom Video Downloader..."
+echo ""
+
+# Verificar que Python3 este instalado
 if ! command -v python3 &> /dev/null; then
-    echo "Error: Python3 no está instalado"
+    echo "Error: Python3 no esta instalado"
     echo "Por favor, instala Python3 para usar el descargador"
     exit 1
 fi
 
-# Verificar si main.py existe
-if [ ! -f "main.py" ]; then
-    echo "Error: No se encuentra main.py"
-    echo "Asegúrate de estar en el directorio correcto del proyecto"
-    exit 1
-fi
+# Verificar archivos necesarios del proyecto
+ARCHIVOS_REQUERIDOS=(
+    "main.py"
+    "core.py"
+    "simple_zoom_downloader.py"
+    "batch_downloader.py"
+    "pyproject.toml"
+)
 
-# Iniciar la interfaz interactiva
-echo "Iniciando Zoom Video Downloader - Interfaz Interactiva..."
+for archivo in "${ARCHIVOS_REQUERIDOS[@]}"; do
+    if [ ! -f "$archivo" ]; then
+        echo "Error: No se encuentra $archivo"
+        echo "Asegurate de estar en el directorio correcto del proyecto"
+        exit 1
+    fi
+done
+
+echo "Archivos del proyecto verificados correctamente."
+
+# Verificar e instalar dependencias
+# ============================================================================
+# Las dependencias se definen en pyproject.toml e incluyen:
+#   - yt-dlp: para descargar videos de Zoom
+#   - PyYAML: para leer archivos de configuracion
+#
+# El script intentara importar los modulos y si fallan,
+# instalara las dependencias automaticamente.
+# ============================================================================
+
+echo "Verificando dependencias..."
+
+python3 -c "
+import yaml
+import subprocess
+import sys
+
+# Verificar yt-dlp
+try:
+    subprocess.run(['yt-dlp', '--version'], check=True, capture_output=True)
+except (subprocess.CalledProcessError, FileNotFoundError):
+    print('yt-dlp no encontrado, instalando...')
+    sys.exit(1)
+
+# Verificar PyYAML
+try:
+    import yaml
+except ImportError:
+    print('PyYAML no encontrado, instalando...')
+    sys.exit(1)
+
+print('Todas las dependencias estan disponibles.')
+" 2>/dev/null || {
+    echo "Instalando dependencias desde pyproject.toml..."
+    pip3 install -e . --break-system-packages 2>/dev/null || pip3 install -e .
+    echo "Dependencias instaladas correctamente."
+}
+
+echo ""
+echo "Listo! Iniciando interfaz..."
 echo ""
 
-# Ejecutar main.py
+# Ejecutar la interfaz interactiva
+# ============================================================================
+# main.py proporciona un menu grafico en terminal con las siguientes opciones:
+#   1. Descargar URL individual
+#   2. Descargar desde archivo (masivo)
+#   3. Ver archivos en carpeta input/
+#   4. Ver estado de descargas
+#   5. Limpiar archivos temporales
+#   6. Ayuda
+#   0. Salir
+# ============================================================================
+
 python3 main.py
 
-# Función para verificar dependencias
-check_dependencies() {
-    if ! command -v python3 &> /dev/null; then
-echo "Error: Python3 no está instalado"
-        exit 1
-    fi
-    
-    # Crear entorno virtual si no existe
-    if [ ! -d "venv" ]; then
-        echo "Creando entorno virtual..."
-        python3 -m venv venv
-    fi
-    
-    # Activar entorno virtual
-    source venv/bin/activate
-    
-    # Instalar dependencias
-    pip install requests yt-dlp --quiet 2>/dev/null
-}
-
-# Función para descarga individual
-download_individual() {
-    local url="$1"
-    local type="$2"
-    local name="$3"
-    
-    if [ -z "$url" ]; then
-        echo "Error: Se requiere una URL"
-        echo "Uso: $0 individual <URL> [tipo] [nombre]"
-        exit 1
-    fi
-    
-    check_dependencies
-    
-    echo "Descarga individual"
-    echo "URL: $url"
-    [ -n "$type" ] && echo "Tipo: $type"
-    [ -n "$name" ] && echo "Nombre: $name"
-    echo ""
-    
-    # Ejecutar descarga individual
-    if [ -n "$type" ] && [ -n "$name" ]; then
-        python simple_zoom_downloader.py "$url" "$type" "$name"
-    elif [ -n "$type" ]; then
-        python simple_zoom_downloader.py "$url" "$type"
-    else
-        python simple_zoom_downloader.py "$url"
-    fi
-    
-    show_status
-}
-
-# Función para descarga masiva
-download_batch() {
-    local file="$1"
-    local type="$2"
-    
-    if [ -z "$file" ]; then
-        echo "Error: Se requiere un archivo"
-        echo "Uso: $0 masivo <archivo> [tipo]"
-        exit 1
-    fi
-    
-    if [ ! -f "$file" ]; then
-        echo "Error: El archivo no existe: $file"
-        echo ""
-        echo "Archivos disponibles en input/:"
-        if [ -d "input" ]; then
-            ls -la input/ 2>/dev/null || echo "  (vacío)"
-        else
-            echo "  (directorio input/ no existe)"
-        fi
-        exit 1
-    fi
-    
-    check_dependencies
-    
-    echo "Descarga masiva"
-    echo "Archivo: $file"
-    [ -n "$type" ] && echo "Tipo: $type"
-    echo ""
-    
-    # Ejecutar descarga masiva
-    if [ -n "$type" ]; then
-        python batch_downloader.py "$file" "$type"
-    else
-        python batch_downloader.py "$file"
-    fi
-    
-    show_status
-}
-
-# Función para mostrar estado
-show_status() {
-    echo ""
-    echo "ESTADO DE DESCARGAS:"
-    echo "======================="
-    
-    if [ -d "downloads" ]; then
-        echo "Directorio downloads/"
-        
-        # Contar archivos
-        local mp4_count=0
-        local mp3_count=0
-        local srt_count=0
-        
-        if [ -d "downloads/MP4" ]; then
-            mp4_count=$(find downloads/MP4/ -name "*.mp4" -not -name "*.part" 2>/dev/null | wc -l)
-        fi
-        
-        if [ -d "downloads/MP3" ]; then
-            mp3_count=$(find downloads/MP3/ -name "*.mp3" 2>/dev/null | wc -l)
-        fi
-        
-        if [ -d "downloads/SRT" ]; then
-            srt_count=$(find downloads/SRT/ -name "*.srt" -o -name "*.vtt" 2>/dev/null | wc -l)
-        fi
-        
-        echo "  📹 Videos (MP4): $mp4_count archivos"
-        echo "  Audios (MP3): $mp3_count archivos"
-        echo "  Transcripciones (SRT/VTT): $srt_count archivos"
-        
-        # Calcular tamaño total
-        local total_size=0
-        if [ -d "downloads" ]; then
-            total_size=$(du -sh downloads/ 2>/dev/null | cut -f1)
-            echo "  💾 Tamaño total: $total_size"
-        fi
-        
-        # Mostrar archivos recientes (últimos 5)
-        echo ""
-        echo "Archivos recientes:"
-        find downloads/ -type f -not -name "*.part" -printf "%TY-%Tm-%Td %TH:%TM %p\n" 2>/dev/null | sort -r | head -5 | while read line; do
-            echo "  $line"
-        done
-        
-    else
-        echo "  📭 No hay descargas realizadas"
-    fi
-}
-
-# Función para limpiar
-clean_files() {
-    echo "Limpiando archivos temporales..."
-    
-    # Eliminar archivos .part (descargas incompletas)
-    find downloads/ -name "*.part" -type f -delete 2>/dev/null
-    echo "  Archivos .part eliminados"
-    
-    # Eliminar entorno virtual si existe
-    if [ -d "venv" ]; then
-        rm -rf venv
-        echo "  Entorno virtual eliminado"
-    fi
-    
-    # Eliminar archivos de log temporales
-    find . -name "*.log" -type f -delete 2>/dev/null
-    echo "  Archivos de log eliminados"
-    
-    echo "Limpieza completada"
-}
-
-# Si se proporcionan argumentos, mostrar ayuda y salir
-if [ $# -gt 0 ]; then
-    echo "⚠️  Este script ahora inicia la interfaz interactiva automáticamente"
-    echo "   Si quieres usar la línea de comandos, ejecuta directamente:"
-    echo "   python3 simple_zoom_downloader.py <URL> [tipo] [nombre]"
-    echo "   python3 batch_downloader.py <archivo> [tipo]"
-    echo ""
-    echo "🎯 Para la interfaz interactiva, simplemente ejecuta:"
-    echo "   ./start.sh"
-    echo ""
-    exit 1
-fi
+echo ""
+echo "Gracias por usar Zoom Video Downloader!"

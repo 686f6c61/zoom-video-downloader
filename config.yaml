@@ -1,0 +1,172 @@
+# ============================================================
+# CONFIGURACION DE ZOOM VIDEO DOWNLOADER
+# ============================================================
+#
+# Este archivo permite personalizar el comportamiento del
+# descargador de grabaciones de Zoom. Los valores mostrados
+# son los valores por defecto.
+#
+# Para modificar, edita los valores manteniendo la estructura.
+# Los cambios se aplican automaticamente al reiniciar.
+#
+# ============================================================
+
+# CONFIGURACION DE DESCARGAS
+# --------------------------
+# Ajustes relacionados con la ubicacion y organizacion
+# de los archivos descargados.
+descargas:
+  # Directorio principal donde se guardaran todos los archivos
+  directorio_base: downloads
+
+  # Subdirectorios para cada tipo de contenido
+  video: MP4          # Archivos de video en formato MP4
+  audio: MP3          # Archivos de audio extraidos en formato MP3
+  transcripcion: SRT   # Archivos de transcripcion en formato SRT/VTT
+
+
+# CONFIGURACION DE VIDEO
+# ----------------------
+# Opciones para la descarga y conversion de videos.
+video:
+  # Formato de video preferido para la descarga
+  # Valores comunes: mp4, webm, mkv
+  formato_preferido: mp4
+
+  # Calidad de video a descargar
+  # Valores: best (mejor disponible), worst (peor), o specifico como 1080p
+  calidad: best
+
+  # Convertir video a audio automaticamente cuando se descarga 'all'
+  # true: extrae el audio y guarda ambos
+  # false: solo guarda el video
+  convertir_audio: true
+
+  # Formato de salida para el audio extraido
+  # Valores comunes: mp3, aac, wav, m4a
+  formato_audio: mp3
+
+  # Calidad del audio extraido
+  # Valores: 0 (mejor), 1-9 (progresivamente peor), o bitrate como 320k
+  # 0 = VBR (Variable Bit Rate) con maxima calidad
+  calidad_audio: 0
+
+
+# CONFIGURACION DE TRANSCRIPCIONES
+# --------------------------------
+# Opciones para la extraccion de subtitulos y transcripciones.
+transcripcion:
+  # Idiomas de subtitulos a descargar
+  # 'all': todos los idiomas disponibles
+  # 'es': solo espanol
+  # 'en': solo ingles
+  idiomas: all
+
+  # Formatos de salida para las transcripciones
+  # La herramienta descargara en VTT y convertira a estos formatos
+  # Puedes quitar 'srt' si no necesitas ese formato
+  formatos_salida:
+    - vtt    # Formato WebVTT (original de yt-dlp)
+    - srt    # Formato SubRip (compatible con mas reproductores)
+
+
+# CONFIGURACION DE REINTENTOS
+# ----------------------------
+# Ajustes para manejar errores temporales de red o servidor.
+reintentos:
+  # Numero maximo de intentos antes de marcar como fallido
+  # Valor recomendado: 3-5
+  maximos: 3
+
+  # Segundos de espera entre reintentos (aumenta exponencialmente)
+  # Primer intento: espera 5 segundos
+  # Segundo intento: espera 10 segundos
+  # Tercer intento: espera 20 segundos
+  intervalo_segundos: 5
+
+  # Porcentaje de tiempo de descarga a esperar antes de reintentar
+  # Evita reintentos muy rapidos en descargas lentas
+  tiempo_espera_porcentaje: 0.1
+
+
+# CONFIGURACION DE LOGGING
+# ------------------------
+# Opciones para el registro de actividad y depuracion.
+logging:
+  # Archivo donde se guardaran los registros
+  # El directorio debe existir (se creara automaticamente)
+  archivo: log/descargas.log
+
+  # Nivel de detalle de los mensajes
+  # Valores:
+  #   DEBUG: maxima informacion (para depuracion)
+  #   INFO: mensajes normales de progreso
+  #   WARNING: solo errores y advertencias
+  #   ERROR: solo errores
+  nivel: INFO
+
+  # Formato de los mensajes de log
+  # %(asctime)s: fecha y hora
+  # %(levelname)s: tipo de mensaje (INFO, WARNING, ERROR)
+  # %(message)s: el mensaje en si
+  formato: "[%(asctime)s] %(levelname)s: %(message)s"
+
+
+# CONFIGURACION DE INTERFAZ
+# -------------------------
+# Opciones para la apariencia en terminal.
+interfaz:
+  # Usar colores en la salida de terminal
+  # true: colores habilitados (requiere terminal compatible)
+  # false: texto plano
+  colores: true
+
+  # Mostrar barra de progreso visual
+  # true: muestra barra de progreso en descargas masivas
+  # false: muestra solo numeros
+  barra_progreso: true
+
+
+# CONFIGURACION DE DESCARGA
+# -------------------------
+# Opciones tecnicas de la descarga.
+descarga:
+  # Tiempo maximo de espera para cada intento (segundos)
+  # 0: sin limite (puede quedarse infinitamente en downloads lentas)
+  timeout_segundos: 300
+
+  # Tamano del buffer de descarga en bytes
+  # 8192: 8 KB (valor conservador)
+  # 65536: 64 KB (valor rapido)
+  # Valores muy altos pueden causar problemas de memoria
+  tamano_buffer: 8192
+
+  # Reintentar descargas fallidas al final del proceso
+  # true: hace un segundo intento con todas las que fallaron
+  # false: solo reporta las fallidas
+  reintentar_descargas_fallidas: true
+
+
+# ============================================================
+# EJEMPLOS DE CONFIGURACION
+# ============================================================
+
+# --- Solo video, maxima calidad ---
+# descargas:
+#   directorio_base: videos
+# video:
+#   calidad: best
+#   convertir_audio: false
+
+# --- Solo audio, alta calidad ---
+# video:
+#   formato_audio: mp3
+#   calidad_audio: 0
+
+# --- Modo silencioso (solo errores) ---
+# logging:
+#   nivel: ERROR
+
+# --- Descargas sin reintentos (mas rapido, menos confiable) ---
+# reintentos:
+#   maximos: 0
